@@ -1,8 +1,27 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
-from sqlalchemy.orm import relationship
+from enum import Enum as EnumType
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Enum
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 
 Base = declarative_base()
+
+class ListingCategory(EnumType):
+    SALE = "satilik"
+    RENTAL = "kiralik"
+
+class RealtyType(EnumType):
+    DAIRE = "daire"
+    VILLA = "villa"
+    MUSTAKIL_EV = "mustakil_ev"
+    RESIDENCE = "residence"
+    KOY_EVI = "koy_evi"
+    CIFTLIK_EVI = "ciftlik_evi"
+    YAZLIK = "yazlik"
+    PREFABRIK = "prefabrik"
+    KOSK = "kosk"
+    YALI_DAIRESI = "yali_dairesi"
+    YALI = "yali"
+
 
 class House(Base):
     __tablename__ = "houses"
@@ -13,6 +32,8 @@ class House(Base):
     url = Column(String, unique=True, index=True)
     version = Column(Integer, default=1)
     is_last_version = Column(Boolean, default=True)
+    listing_category = Column(Enum(ListingCategory, name="listing_category", values_callable=lambda obj: [e.value for e in obj]), index=True, default=ListingCategory.SALE.value, server_default=ListingCategory.SALE.value)
+    realty_type = Column(Enum(RealtyType, name="realty_type", values_callable=lambda obj: [e.value for e in obj]), index=True, default=RealtyType.DAIRE.value, server_default=RealtyType.DAIRE.value)
     price = Column(Integer, index=True)
     currency = Column(String, index=True)
     predicted_price = Column(Integer, index=True, default=None, nullable=True)
