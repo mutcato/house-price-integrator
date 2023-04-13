@@ -40,14 +40,17 @@ class RealtyType(EnumType):
     VILLA = "villa"
     MUSTAKIL_EV = "müstakil ev"
     RESIDENCE = "residence"
-    KOY_EVI = "koy_evi"
-    CIFTLIK_EVI = "ciftlik evi"
-    YAZLIK = "yazlik"
+    CIFTLIK_EVI = "çiftlik evi"
+    YAZLIK = "yazlık"
     PREFABRIK = "prefabrik"
-    KOSK = "kosk"
-    YALI_DAIRESI = "yali dairesi"
-    YALI = "yali"
+    KOSK = "köşk"
+    YALI_DAIRESI = "yalı dairesi"
+    YALI = "yalı"
     BINA = "bina"
+    KOY_EVI = "köy evi"
+    KOOPERATIF = "kooperatif"
+    DAG_EVI = "dağ evi"
+    LOFT_DAIRE = "loft daire"
 
 
 class House(Base):

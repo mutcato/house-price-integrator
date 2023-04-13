@@ -1,18 +1,20 @@
 import json
 import os
 import re
+from utils import get_traceback
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Iterator, Optional, Union
 
-from sqlalchemy.exc import IntegrityError, NoResultFound
-
+import logging
 from database import session
 from models import Attribute, DataSource
 from models import House as HouseModel
 from models import HouseAttribute, ListingCategory, RealtyType
 from settings import config as settings
+
+logger = logging.getLogger("messagereport")
 
 files: Iterator = os.scandir(settings["DATA_ROOT"])
 
@@ -30,7 +32,6 @@ class House:
     city: str
     room: int
     living_room: int = field(metadata={"alias": "livingRoom"})
-    price: int
     floor: dict
     heating: str
     fuel: dict
@@ -40,19 +41,20 @@ class House:
     balcony: str
     furnished: str
     parking: str
-    attributes: list
+    price: int = field(default_factory=int)
+    _attributes: list = field(default_factory=list, metadata={"alias": "attributes"})
     total_floor: int = field(init=False, default_factory=int)
     internal_id: int = field(metadata={"alias": "realtyId"}, default_factory=int)
     url: str = field(default="", metadata={"alias": "detailUrl"})
     bathroom: int = field(metadata={"alias": "bathRoom"}, default_factory=int)
-    map_location: dict = field(
+    _map_location: dict = field(
         default="", metadata={"alias": "mapLocation"}, repr=False
     )
     latitude: float = field(default=0.0)
     longitude: float = field(default=0.0)
     created_at: datetime = field(default="", metadata={"alias": "createdDate"})
     updated_at: datetime = field(default="", metadata={"alias": "updatedDate"})
-    sqm: dict = field(default="", metadata={"alias": "sqm"}, repr=False)
+    _sqm: dict = field(default="", metadata={"alias": "sqm"}, repr=False)
     age: int = field(default_factory=int)
     realty_type: str = field(default="", metadata={"alias": "subCategory"})
     listing_category: str = field(default="", metadata={"alias": "redirectLink"})
@@ -63,29 +65,34 @@ class House:
         self.city = self.city["name"].encode("utf-8").decode("utf-8").lower()
         self.room = sum(self.room)
         self.living_room = sum(self.living_room)
-        self.latitude = self.map_location["lat"]
-        self.longitude = self.map_location["lon"]
+        self.latitude = self._map_location["lat"]
+        self.longitude = self._map_location["lon"]
         self.created_at = datetime.strptime(
             self.created_at.split(".")[0], "%Y-%m-%dT%H:%M:%S"
         )
         self.updated_at = datetime.strptime(
             self.updated_at.split(".")[0], "%Y-%m-%dT%H:%M:%S"
         )
-        self.net_sqm = self.sqm["netSqm"]
-        self.gross_sqm = sum(self.sqm["grossSqm"])
+        self.net_sqm = self._sqm["netSqm"]
+        self.gross_sqm = sum(self._sqm["grossSqm"])
         _temp = self.floor
-        self.floor = _temp["name"]
-        self.total_floor = _temp["count"]
-        self.heating = self.heating["name"].encode("utf-8").decode("utf-8").lower()
+        self.floor = _temp["name"] if _temp else None
+        self.total_floor = _temp["count"] if _temp else None
+        self.heating = self.heating["name"].encode("utf-8").decode("utf-8").lower() if self.heating else None
         self.fuel = self.sanitize(self.fuel, "name")
         self.usage = self.sanitize(self.usage, "name")
         self.credit = self.sanitize(self.credit, "name")
-        self.deposit = int(self.deposit["amount"])
+        self.deposit = int(self.deposit["amount"]) if self.deposit else None
         self.realty_type = RealtyType(self.sanitize(self.realty_type, "typeName"))
         self.listing_category = ListingCategory(
             self.sanitize(self.listing_category, "linkedCategoryUrl")
         )
-        self.attributes = self.get_attributes(self.attributes)
+        self._attributes = self.get_attributes(self._attributes) if self._attributes else None
+
+    def __setattr__(self, name, value):
+        if name == "price":
+            assert value < 2_147_483_647, f"value of {name} can't be higher than integer limit 2_147_483_647 : {value}"
+        self.__dict__[name] = value
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
@@ -112,6 +119,17 @@ class House:
             for attribute in attr_list:
                 result.append(
                     f"{camel_to_snake(category)}_{attribute['name'].encode('utf-8').decode('utf-8').lower()}"
+                    .replace(" ", "_")
+                    .replace("-", "_")
+                    .replace("(", "")
+                    .replace(")", "")
+                    .replace("/", "_")
+                    .replace("'", "")
+                    .replace("`", "")
+                    .replace(":", "")
+                    .replace(";", "")
+                    .replace(".", "")
+                    .replace(",", "")
                 )
         return result
 
@@ -129,43 +147,37 @@ class House:
             data = result
 
     def to_dict(self):
-        return {
-            "internal_id": self.internal_id,
-            "url": self.url,
-            "price": self.price,
-            "currency": self.currency,
-            "district": self.district,
-            "county": self.county,
-            "city": self.city,
-            "latitude": self.latitude,
-            "longitude": self.longitude,
-            "room": self.room,
-            "living_room": self.living_room,
-            "bathroom": self.bathroom,
-            "net_sqm": self.net_sqm,
-            "gross_sqm": self.gross_sqm,
-            "floor": self.floor,
-            "total_floor": self.total_floor,
-            "heating": self.heating,
-            "fuel": self.fuel,
-            "usage": self.usage,
-            "credit": self.credit,
-            "deposit": self.deposit,
-            "balcony": self.balcony,
-            "furnished": self.furnished,
-            "parking": self.parking,
-            "age": self.age,
-            "realty_type": self.realty_type.value,
-            "listing_category": self.listing_category.value,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-        }
+        result = {}
+        for key, item in self.__dict__.items():
+            if not key.startswith("_"):
+                _field = getattr(self, key)
+                if hasattr(_field, "value"):
+                    # Enum field case (e.g. ListingCategory) -> get value of enum field
+                    result[key] = _field.value
+                else:
+                    result[key] = item
+
+        return result
 
     def save(self):
         house = HouseModel(**self.to_dict())
-        for attr in self.attributes:
-            attribute = Attribute(name=attr, value=1)
-            attribute._house.append(house)
+        if self._attributes is None:
+            session.add(house)
+            session.commit()
+            return
+        
+        for attr in self._attributes:
+            attributes = session.query(Attribute).filter_by(name=attr)
+            number_of_attrs = attributes.count()
+            if number_of_attrs > 1:
+                error_message = f"Duplicate attribute: {attr}"
+                logger.error(error_message)
+                raise Exception(error_message)
+            elif number_of_attrs == 0:
+                attribute = Attribute(name=attr, value=1)
+            else:
+                attribute = attributes.first()
+            # attribute._house.append(house)
             house._attribute.append(attribute)
             session.add(attribute)
         session.add(house)
@@ -184,11 +196,19 @@ class House:
             raise Exception("Duplicate house")
         return
 
-
-for file in files:
-    with open(file.path, "r") as f:
-        data = json.loads(f.read())["realtyDetail"]
-        house = House.from_dict(data)
-        house.save_or_update()
-        # Neden next file'a geçmiyor?
-        print("bitti")
+if __name__ == "__main__":
+    for file in files:
+        try:
+            with open(file.path, "r") as f:
+                data = json.loads(f.read())["realtyDetail"]
+                house = House.from_dict(data)
+                house.save_or_update()
+            os.remove(file.path)
+            logger.info(f"Succesfully saved {file.name} integration.")
+        except AssertionError as e:
+            logger.error(f"Error on {file.name} integration. Error: {get_traceback(e)}")
+            os.remove(file.path)
+        except Exception as e:
+            logger.error(f"Error on {file.name} integration. Error: {get_traceback(e)}")
+        
+        continue
