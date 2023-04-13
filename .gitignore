@@ -1,5 +1,6 @@
 realty_results*/
 venv*/
+exports/*
 .env
 __pycache__
-log
+logs/*
