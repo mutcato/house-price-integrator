@@ -7,3 +7,9 @@ docker run -p 5050:80 -e "PGADMIN_DEFAULT_EMAIL=example@example.com" -e "PGADMIN
 ### Alembic commands
 alembic revision --autogenerate -m "Add Type and Category fields"
 alembic upgrade head
+
+### Integrator
+Run ```python integrator.py``` to insert json files into database
+
+## Export
+Run ```python export.py``` to create csv files to exports directory

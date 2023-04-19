@@ -1,20 +1,28 @@
 import csv
+from datetime import datetime
+
+from sqlalchemy.sql import text
+
 from database import session
 from models import *
-from sqlalchemy.sql import text
-from datetime import datetime
 from settings import config as settings
+
 
 class Flattener:
     qs = session.query(Attribute.name).all()
-    
+
     @property
     def attributes(self):
         for attr in self.qs:
-            yield attr[0] 
+            yield attr[0]
 
     def get_sql(self):
-        select_attributes = ",".join([f"""MAX(CASE WHEN ta.name = '{attr}' THEN ta.value ELSE NULL END) AS {attr}""" for attr in self.attributes])
+        select_attributes = ",".join(
+            [
+                f"""MAX(CASE WHEN ta.name = '{attr}' THEN ta.value ELSE NULL END) AS {attr}"""
+                for attr in self.attributes
+            ]
+        )
         statement = f"""
             SELECT 
                 th.*,
@@ -34,10 +42,17 @@ class Flattener:
         columns = rows.keys()._keys
         result = [dict(zip(columns, row)) for row in rows]
         file = f"""{settings["EXPORT_PATH"]}/{str(datetime.today().date())}.csv"""
-        with open(file, 'w', newline='') as output_file:
+        with open(file, "w", newline="") as output_file:
             dict_writer = csv.DictWriter(output_file, columns)
             dict_writer.writeheader()
             dict_writer.writerows(result)
+
+
+"""
+TODO: csv oluştururken her seferinde en baştan oluşturmasın.
+Günlük olarak alsın, önceki gün kaldığı yerden devam etsin.
+Drive'a yollasın
+"""
 
 
 if __name__ == "__main__":
