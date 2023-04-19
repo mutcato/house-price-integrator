@@ -1,22 +1,35 @@
+import asyncio
 import json
+import logging
 import os
 import re
-from utils import get_traceback
+import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Iterator, Optional, Union
 
-import logging
+from sqlalchemy.exc import PendingRollbackError
+
 from database import session
 from models import Attribute, DataSource
 from models import House as HouseModel
 from models import HouseAttribute, ListingCategory, RealtyType
 from settings import config as settings
+from utils import get_traceback
 
 logger = logging.getLogger("messagereport")
 
-files: Iterator = os.scandir(settings["DATA_ROOT"])
+
+def follow():
+    """Follow the data directory for new files."""
+    while True:
+        files: Iterator = os.scandir(settings["DATA_ROOT"])
+        _files = [file for file in files]
+        if not _files:
+            time.sleep(180)  # Sleep briefly
+            continue
+        yield _files
 
 
 def camel_to_snake(name: str) -> str:
@@ -78,7 +91,11 @@ class House:
         _temp = self.floor
         self.floor = _temp["name"] if _temp else None
         self.total_floor = _temp["count"] if _temp else None
-        self.heating = self.heating["name"].encode("utf-8").decode("utf-8").lower() if self.heating else None
+        self.heating = (
+            self.heating["name"].encode("utf-8").decode("utf-8").lower()
+            if self.heating
+            else None
+        )
         self.fuel = self.sanitize(self.fuel, "name")
         self.usage = self.sanitize(self.usage, "name")
         self.credit = self.sanitize(self.credit, "name")
@@ -87,11 +104,15 @@ class House:
         self.listing_category = ListingCategory(
             self.sanitize(self.listing_category, "linkedCategoryUrl")
         )
-        self._attributes = self.get_attributes(self._attributes) if self._attributes else None
+        self._attributes = (
+            self.get_attributes(self._attributes) if self._attributes else None
+        )
 
     def __setattr__(self, name, value):
         if name == "price":
-            assert value < 2_147_483_647, f"value of {name} can't be higher than integer limit 2_147_483_647 : {value}"
+            assert (
+                value < 2_147_483_647
+            ), f"value of {name} can't be higher than integer limit 2_147_483_647 : {value}"
         self.__dict__[name] = value
 
     @classmethod
@@ -118,8 +139,9 @@ class House:
         for category, attr_list in data.items():
             for attribute in attr_list:
                 result.append(
-                    f"{camel_to_snake(category)}_{attribute['name'].encode('utf-8').decode('utf-8').lower()}"
-                    .replace(" ", "_")
+                    f"{camel_to_snake(category)}_{attribute['name'].encode('utf-8').decode('utf-8').lower()}".replace(
+                        " ", "_"
+                    )
                     .replace("-", "_")
                     .replace("(", "")
                     .replace(")", "")
@@ -165,7 +187,7 @@ class House:
             session.add(house)
             session.commit()
             return
-        
+
         for attr in self._attributes:
             attributes = session.query(Attribute).filter_by(name=attr)
             number_of_attrs = attributes.count()
@@ -185,30 +207,48 @@ class House:
 
     def save_or_update(self):
         house = session.query(HouseModel).filter_by(
-            internal_id=self.internal_id, data_source=DataSource.HEPSI.value
+            internal_id=self.internal_id,
+            data_source=DataSource.HEPSI.value,
+            is_last_version=True,
         )
         if house.count() == 0:
             self.save()
+            logger.info(f"House {self.internal_id} saved")
         elif house.count() == 1:
             house.update(self.to_dict())
             session.commit()
+            logger.info(f"House {self.internal_id} updated")
         else:
             raise Exception("Duplicate house")
         return
 
+
+def main_coroutine():
+    _files = follow()  # generator of files
+    for files in _files:
+        for file in files:
+            try:
+                with open(file.path, "r") as f:
+                    data = json.loads(f.read())["realtyDetail"]
+                    house = House.from_dict(data)
+                    house.save_or_update()
+                os.remove(file.path)
+                logger.info(f"File {file.name} removed")
+            except AssertionError as e:
+                logger.error(
+                    f"Error on {file.name} integration. Error: {get_traceback(e)}"
+                )
+                os.remove(file.path)
+                session.rollback()
+            except Exception as e:
+                logger.error(
+                    f"Error on {file.name} integration. Error: {get_traceback(e)}"
+                )
+                session.rollback()
+            finally:
+                session.close()
+                continue
+
+
 if __name__ == "__main__":
-    for file in files:
-        try:
-            with open(file.path, "r") as f:
-                data = json.loads(f.read())["realtyDetail"]
-                house = House.from_dict(data)
-                house.save_or_update()
-            os.remove(file.path)
-            logger.info(f"Succesfully saved {file.name} integration.")
-        except AssertionError as e:
-            logger.error(f"Error on {file.name} integration. Error: {get_traceback(e)}")
-            os.remove(file.path)
-        except Exception as e:
-            logger.error(f"Error on {file.name} integration. Error: {get_traceback(e)}")
-        
-        continue
+    main_coroutine()
