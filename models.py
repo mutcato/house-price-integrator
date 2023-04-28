@@ -71,14 +71,12 @@ class House(Base):
     net_sqm = Column(Integer, index=True)
     gross_sqm = Column(Integer, index=True)
     age = Column(Integer, index=True)
-    balcony = Column(String, index=True)
     heating = Column(String, index=True)
     fuel = Column(String, index=True)
     usage = Column(String, index=True)
     credit = Column(String, index=True)
     deposit = Column(String, index=True)
     furnished = Column(String, index=True)
-    parking = Column(String, index=True)
     version = Column(SmallInteger, default=1)
     is_last_version = Column(Boolean, default=True)
     latitude = Column(Numeric, index=True)
@@ -126,8 +124,8 @@ class Attribute(Base):
 class HouseAttribute(Base):
     __tablename__ = "house_attributes"
 
-    house_id = Column(Integer, ForeignKey("houses.id"))
-    attribute_id = Column(Integer, ForeignKey("attributes.id"))
+    house_id = Column(Integer, ForeignKey("houses.id"), index=True)
+    attribute_id = Column(Integer, ForeignKey("attributes.id"), index=True)
 
     def __repr__(self):
         return f"HouseAttribute(house={self.house}, attribute={self.attribute})"
