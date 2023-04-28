@@ -7,9 +7,7 @@ import settings
 config = settings.config
 SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{config['DATABASE_USER']}:{config['DATABASE_PASSWORD']}@{config['DATABASE_HOST']}/{config['DATABASE_NAME']}"
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"connect_timeout": 10})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 session = SessionLocal()
 
