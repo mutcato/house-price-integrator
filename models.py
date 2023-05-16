@@ -57,12 +57,12 @@ class House(Base):
     __tablename__ = "houses"
     __table_args__ = (
         # this can be db.PrimaryKeyConstraint if you want it to be a primary key
-        UniqueConstraint("internal_id", "data_source", name="unique_house"),
+        UniqueConstraint("internal_id", "data_source", "version", "is_active", name="unique_house"),
     )
 
     internal_id = Column(Integer, index=True)
     data_source = Column(String, index=True, default=DataSource.HEPSI.value)
-    url = Column(String, unique=True, index=True, nullable=False)
+    url = Column(String, index=True, nullable=False)
     room = Column(SmallInteger, index=True, default=0)
     living_room = Column(SmallInteger, index=True, default=0)
     floor = Column(String, index=True)

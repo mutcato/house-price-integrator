@@ -3,12 +3,9 @@ import logging
 import os
 import re
 import time
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from datetime import datetime
-from functools import wraps
 from typing import Any, Dict, Iterator, Optional, Union
-
-from sqlalchemy.exc import PendingRollbackError
 
 from database import session
 from models import Attribute, DataSource
@@ -68,6 +65,8 @@ class House:
     age: int = field(default_factory=int)
     realty_type: str = field(default="", metadata={"alias": "subCategory"})
     listing_category: str = field(default="", metadata={"alias": "redirectLink"})
+    version: int = field(default=1)
+    is_last_version: bool = field(default=True)
 
     def __post_init__(self):
         self.district = self.district["name"].encode("utf-8").decode("utf-8").lower()
@@ -203,18 +202,29 @@ class House:
         session.commit()
 
     def save_or_update(self):
-        house = session.query(HouseModel).filter_by(
+        existing_houses = session.query(HouseModel).filter_by(
             internal_id=self.internal_id,
             data_source=DataSource.HEPSI.value,
             is_last_version=True,
         )
-        if house.count() == 0:
+        if existing_houses.count() == 0:
             self.save()
             logger.info(f"House {self.internal_id} saved")
-        elif house.count() == 1:
-            house.update(self.to_dict())
+        elif existing_houses.count() == 1 and existing_houses.first().price == self.price:
+            existing_houses.update(self.to_dict())
             session.commit()
             logger.info(f"House {self.internal_id} updated")
+        elif existing_houses.count() == 1 and existing_houses.first().price != self.price:
+            existing_house = existing_houses.first()
+            self.version = existing_house.version + 1
+            self.save()
+            existing_house.is_last_version = False
+            existing_house.is_active = False
+            session.commit()
+            
+            logger.info(
+                f"House {self.internal_id} updated. Old price: {existing_house.price}, new price: {self.price}, version: {self.version}"
+            )
         else:
             raise Exception("Duplicate house")
         return
