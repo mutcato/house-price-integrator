@@ -101,10 +101,10 @@ class House(Base):
     )
 
     def __repr__(self):
-        return f"House(internal_id={self.internal_id}, data_source={self.data_source}, price={self.price}, currency={self.currency}, predicted_price={self.predicted_price})"
+        return f"House(internal_id={self.internal_id}, data_source={self.data_source}, version={self.version}, is_last_version={self.is_last_version}, is_active={self.is_active} price={self.price}, currency={self.currency}, predicted_price={self.predicted_price})"
 
     def __str__(self):
-        return f"House(internal_id={self.internal_id}, data_source={self.data_source}, price={self.price}, currency={self.currency}, predicted_price={self.predicted_price})"
+        return f"House(internal_id={self.internal_id}, data_source={self.data_source}, version={self.version}, is_last_version={self.is_last_version}, is_active={self.is_active} price={self.price}, currency={self.currency}, predicted_price={self.predicted_price})"
 
 
 class Attribute(Base):

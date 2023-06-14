@@ -9,12 +9,12 @@ from typing import Any, Dict, Iterator, Optional, Union
 
 from database import session
 from models import Attribute, DataSource
-from models import House as HouseModel
+from models import House as HouseModel, HouseAttribute
 from models import ListingCategory, RealtyType
 from settings import config as settings
 from utils import get_traceback
 
-logger = logging.getLogger("messagereport")
+logger = logging.getLogger("django")
 
 
 def follow():
@@ -225,8 +225,13 @@ class House:
             logger.info(
                 f"House {self.internal_id} updated. Old price: {existing_house.price}, new price: {self.price}, version: {self.version}"
             )
+        elif existing_houses.count() > 1:
+            for existing_house in existing_houses:
+                session.query(HouseAttribute).filter_by(house_id=existing_house.id).delete()
+            logger.warning(f"Duplicate houses deleted: {[h for h in existing_houses]}")
+            existing_houses.delete()
         else:
-            raise Exception("Duplicate house")
+            logger.error(f"THERE IS AN UNEXPECTED ERROR: {[h for h in existing_houses]}")
         return
 
 
