@@ -51,6 +51,7 @@ class RealtyType(EnumType):
     KOOPERATIF = "kooperatif"
     DAG_EVI = "dağ evi"
     LOFT_DAIRE = "loft daire"
+    BUNGALOV = "bungalov"
 
 
 class House(Base):

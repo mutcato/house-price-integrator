@@ -44,7 +44,7 @@ class Flattener:
                 houses h
                 LEFT JOIN house_attributes ha ON h.id = ha.house_id
                 LEFT JOIN attributes attr ON ha.attribute_id = attr.id
-            WHERE h.listing_category = '{args.listing}' AND h.price > {args.price_min} AND h.currency = 'TL' AND h.is_active = true
+            WHERE h.listing_category = '{args.listing}' AND h.price > {args.price_min} AND h.currency = 'TL' AND h.is_active = true AND inserted_at>'2023-11-25' 
             GROUP BY 
                 h.id
             ORDER BY inserted_at DESC;
