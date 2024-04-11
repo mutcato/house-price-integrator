@@ -66,8 +66,8 @@ def linear_regression(file:str, model_name:str):
             ('num', numeric_transformer, continuous_features),
             ('cat', categorical_transformer, categorical_features)])
 
-    X_train_val, X_test, y_train_val, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size=0.25, random_state=42)
+    # X_train_val, X_test, y_train_val, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.25, random_state=42)
 
     # Create linear regression model pipeline
     lr_pipeline = Pipeline(steps=[('preprocessor', preprocessor),
