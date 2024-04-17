@@ -13,6 +13,7 @@ from models import House as HouseModel, HouseAttribute
 from models import ListingCategory, RealtyType
 from settings import config as settings
 from utils import get_traceback
+from ai_model import MyRandomForestRegressor
 
 logger = logging.getLogger("django")
 
@@ -176,6 +177,9 @@ class House:
                     result[key] = item
 
         return result
+    
+    def predict_prices(self):
+        pass
 
     def save(self):
         house = HouseModel(**self.to_dict())

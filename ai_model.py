@@ -2,7 +2,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split # will be used for data split
 from sklearn.preprocessing import LabelEncoder # for preprocessing
@@ -88,34 +88,74 @@ def linear_regression(file:str, model_name:str):
     print(f"Validation RMSE: {val_rmse}")
 
 
-class MyRandomForestRegressor(object):
+class MyRandomForestRegressor:
     
     # Change instance variables to class variables
     
-    def __init__(self, file:str):
+    def __init__(self, file:str, suffix:str=""):
         # JSON to pandas DataFrame
-        path_to_artifacts = "bin/"
-        self.values_fill_missing = joblib.load(path_to_artifacts + "most_frequent_values.joblib")
-        self.encoders = joblib.load(path_to_artifacts + "encoders.joblib")
-        self.model = joblib.load(path_to_artifacts + "random_forest_without_scaling.joblib")
-
         self.input_data = pd.read_csv(file)
+        self.suffix = suffix
         self.input_data.dropna(thresh=len(self.input_data)*0.1, axis=1, inplace=True)
         self.target_column = 'price'
         self.target = self.input_data[self.target_column]
-        self.ilan_no = self.input_data['ilan_no']
         self.all_columns = self.input_data.columns.to_list()
         self.unnecessary_columns = ['id', 'internal_id', 'data_source', 'url', 'version', 'is_last_version', 'created_at', 'updated_at', 'predicted_price', 'predicted_rental_price', 'is_active', 'listing_category']
         self.continious_features = ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm']
-        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + [self.target_column] + self.unnecessary_columns)]
+        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + [self.target_column, "inserted_at"] + self.unnecessary_columns)]
+        self.boolean_features = [col for col in self.input_data.columns if "_attributes" in col]
 
-        
+    def train(self):
+        self.input_data = self._convert_booleans(self.input_data, self.boolean_features)
+        self._convert_categoricals()
+        self._convert_date_to_integer("inserted_at")
+        scale_continious_features(self.input_data, self.continious_features)
+        # Drop columns with more than 90% missing values
+        self.input_data = self.input_data.dropna(thresh=len(self.input_data)*0.1, axis=1)
+
+        X = self.input_data[self.continious_features + self.categorical_features]
+        y = self.input_data[self.target_column]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state=123)
+        rf = RandomForestRegressor(n_estimators = 100, n_jobs=-1)
+        imputer = SimpleImputer(strategy='mean')
+        pipeline = make_pipeline(imputer, rf)
+        rf_result = pipeline.fit(X_train, y_train)
+
+        # Predictions with test data
+        y_predict_with_rf = rf_result.predict(X_test)
+        print(r2_score(y_test.values, y_predict_with_rf))
+        print(mean_squared_error(y_test.values, y_predict_with_rf))
+        most_frequent_values = dict(self.input_data.mode().iloc[0])
+        # save preprocessing objects and RF algorithm
+        joblib.dump(most_frequent_values, f"./bin/most_frequent_values_{self.suffix}.joblib", compress=True)
+        joblib.dump(self.encoders, f"./bin/encoders_{self.suffix}.joblib", compress=True)
+        joblib.dump(rf, f"./bin/random_forest_without_scaling_{self.suffix}.joblib", compress=True)
+        breakpoint()
+        # joblib.dump(et, "./bin/extra_trees_without_scaling.joblib", compress=True)
+
+    def _convert_date_to_integer(self, date_field: str):
+        # Converts year-month format into a unique integer
+        self.input_data[date_field] = self.input_data[date_field].astype(str).str[:7]
+        unique_months = self.input_data[date_field].unique().tolist()
+        continues_values_for_inserted_month = [i+1 for i, _ in enumerate(unique_months)]
+        continues_values_for_inserted_month.reverse()
+        self.input_data[date_field] = self.input_data[date_field].replace(unique_months, continues_values_for_inserted_month)
+        self.continious_features.append(date_field)
+
+    @staticmethod
+    def _convert_booleans(self, data: pd.DataFrame, boolean_features: list):
+        for col in boolean_features:
+            data[col] = data[col].fillna(0)
+            data[col] = data[col].astype(bool)
+
+        return data
+
     def _convert_categoricals(self):
-        encoders = {}
+        self.encoders = {}
         for column in self.categorical_features:
             categorical_convert = LabelEncoder()
             self.input_data[column] = categorical_convert.fit_transform(self.input_data[column])
-            encoders[column] = categorical_convert    
+            self.encoders[column] = categorical_convert    
 
     def preprocessing(self):
         # combine district and neighbourhood
@@ -147,10 +187,33 @@ class MyRandomForestRegressor(object):
                 encoded_data[column] = self.input_data[column]
         
         return encoded_data
+    
+    def _encode_categorical_features(self, dataframe: pd.DataFrame):
+        # encode categorical features
+        encoded_data = {}
+        for column in self.all_columns:
+            # scanning in categorical and continious features
+            try:
+                # If the feature is categorical then encode the categories
+                categorical_convert = self.encoders[column]
+                encoded_data[column] = categorical_convert.transform(self.processed_data[column])
+            except:   
+                # If the feature is not categorical the add as it is
+                encoded_data[column] = self.input_data[column]
+        
+        return encoded_data
+    
 
     def predict(self, input_data):
+        path_to_artifacts = "bin/"
+        # self.values_fill_missing = joblib.load(path_to_artifacts + "most_frequent_values.joblib")
+        # self.encoders = joblib.load(path_to_artifacts + "encoders.joblib")
+        model = joblib.load(path_to_artifacts + f"random_forest_without_scaling_{self.suffix}.joblib")
         input_df = pd.DataFrame.from_dict(input_data)
-        return self.model.predict(input_df)
+        input_df = self._convert_booleans(input_df, self.boolean_features)
+
+        scale_continious_features(input_df, self.continious_features)
+        return model.predict(input_df)
 
     def postprocessing(self, predictions):
         result = []
@@ -160,7 +223,6 @@ class MyRandomForestRegressor(object):
                 
             actual_price = self.input_data[self.target_column][key]
             result.append({
-                "ilan_no": self.ilan_no[key],
                 "actual": actual_price,
                 "prediction": pred,
                 "diff_nominal": round(actual_price - pred),
@@ -185,7 +247,20 @@ class MyRandomForestRegressor(object):
         return prediction
 
 
+def get_non_common_features(set1, set2):
+    return list(set1.symmetric_difference(set2))
+
 if __name__ == "__main__":
-    # regressor = MyRandomForestRegressor("exports/sorted-result-satilik.csv")
-    linear_regression("exports/sorted-result-satilik.csv", "bin/linear_regression_model_satilik.pkl")
-    linear_regression("exports/sorted-result-kiralik.csv", "bin/linear_regression_model_kiralik.pkl")
+    regressor_satilik = MyRandomForestRegressor("exports/sorted-result-satilik.csv", suffix="satilik")
+    regressor_kiralik = MyRandomForestRegressor("exports/sorted-result-kiralik.csv", suffix="kiralik")
+    common_features = [c for c in set(regressor_satilik.input_data.columns).intersection(set(regressor_kiralik.input_data.columns))]
+    non_common_features = get_non_common_features(
+        set(regressor_satilik.input_data.columns), 
+        set(regressor_kiralik.input_data.columns)
+    )
+    regressor_satilik.unnecessary_columns.extend(non_common_features)
+    regressor_kiralik.unnecessary_columns.extend(non_common_features)
+    regressor_satilik.train()
+    regressor_kiralik.train()
+    # linear_regression("exports/sorted-result-satilik.csv", "bin/linear_regression_model_satilik.pkl")
+    # linear_regression("exports/sorted-result-kiralik.csv", "bin/linear_regression_model_kiralik.pkl")
