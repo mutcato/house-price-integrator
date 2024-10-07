@@ -43,12 +43,12 @@ def linear_regression(file:str, model_name:str):
 
     X = data.drop(columns=[target_feature])
     y = data[target_feature]
-    X["inserted_at"] = X["inserted_at"].astype(str).str[:7]
-    unique_months = X["inserted_at"].unique().tolist()
-    continues_values_for_inserted_month = [i+1 for i, _ in enumerate(unique_months)]
-    continues_values_for_inserted_month.reverse()
-    X["inserted_at"] = X["inserted_at"].replace(unique_months, continues_values_for_inserted_month)
-    continuous_features.append("inserted_at")
+    X["updated_at"] = X["updated_at"].astype(str).str[:7]
+    unique_months = X["updated_at"].unique().tolist()
+    continues_values_for_updated_month = [i+1 for i, _ in enumerate(unique_months)]
+    continues_values_for_updated_month.reverse()
+    X["updated_at"] = X["updated_at"].replace(unique_months, continues_values_for_updated_month)
+    continuous_features.append("updated_at")
     X = scale_continious_features(X, continuous_features)
 
     # Preprocessing pipeline
@@ -92,28 +92,41 @@ class MyRandomForestRegressor:
     
     # Change instance variables to class variables
     
-    def __init__(self, file:str, suffix:str=""):
+    def __init__(self, input_data: pd.DataFrame, suffix:str=""):
         # JSON to pandas DataFrame
-        self.input_data = pd.read_csv(file)
         self.suffix = suffix
+        self.path_to_artifacts = "bin"
+        self.input_data = input_data
         self.input_data.dropna(thresh=len(self.input_data)*0.1, axis=1, inplace=True)
         self.target_column = 'price'
         self.target = self.input_data[self.target_column]
         self.all_columns = self.input_data.columns.to_list()
-        self.unnecessary_columns = ['id', 'internal_id', 'data_source', 'url', 'version', 'is_last_version', 'created_at', 'updated_at', 'predicted_price', 'predicted_rental_price', 'is_active', 'listing_category']
-        self.continious_features = ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm']
-        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + [self.target_column, "inserted_at"] + self.unnecessary_columns)]
+        
+        # Only get the columns are in self.all_columns
+        self.unnecessary_columns = [col for col in ['id', 'internal_id', 'data_source', 'url', 'version', 'is_last_version', 'created_at' ,'inserted_at', 'predicted_price', 'predicted_rental_price', 'is_active', 'listing_category'] if col in self.all_columns]
+        
+        # Only get the columns are in self.all_columns
+        self.continious_features = [col for col in ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm', 'deposit'] if col in self.all_columns]
+        
+        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + [self.target_column, "updated_at"] + self.unnecessary_columns)]
         self.boolean_features = [col for col in self.input_data.columns if "_attributes" in col]
 
     def train(self):
         self.input_data = self._convert_booleans(self.input_data, self.boolean_features)
         self._convert_categoricals()
-        self._convert_date_to_integer("inserted_at")
-        scale_continious_features(self.input_data, self.continious_features)
+        date_index_map = self._convert_date_to_integer(self.input_data, "updated_at")
+        
         # Drop columns with more than 90% missing values
         self.input_data = self.input_data.dropna(thresh=len(self.input_data)*0.1, axis=1)
 
-        X = self.input_data[self.continious_features + self.categorical_features]
+        # Fill None values continious_features with 0. 
+        df_slice = self.input_data[self.continious_features].copy()
+        df_slice.fillna(0, inplace=True)
+        self.input_data[self.continious_features] = df_slice
+
+        scale_continious_features(self.input_data, self.continious_features)
+
+        X = self.input_data[self.continious_features + self.categorical_features + self.boolean_features + ["updated_at"]]
         y = self.input_data[self.target_column]
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state=123)
         rf = RandomForestRegressor(n_estimators = 100, n_jobs=-1)
@@ -130,20 +143,22 @@ class MyRandomForestRegressor:
         joblib.dump(most_frequent_values, f"./bin/most_frequent_values_{self.suffix}.joblib", compress=True)
         joblib.dump(self.encoders, f"./bin/encoders_{self.suffix}.joblib", compress=True)
         joblib.dump(rf, f"./bin/random_forest_without_scaling_{self.suffix}.joblib", compress=True)
-        breakpoint()
+        joblib.dump(date_index_map, f"./bin/date_index_map_{self.suffix}.joblib", compress=True)
+        joblib.dump(self.boolean_features, f"./bin/attributes_{self.suffix}.joblib", compress=True)
         # joblib.dump(et, "./bin/extra_trees_without_scaling.joblib", compress=True)
 
-    def _convert_date_to_integer(self, date_field: str):
+    def _convert_date_to_integer(self, dataframe: pd.DataFrame, date_field: str):
         # Converts year-month format into a unique integer
-        self.input_data[date_field] = self.input_data[date_field].astype(str).str[:7]
-        unique_months = self.input_data[date_field].unique().tolist()
+        dataframe[date_field] = dataframe[date_field].astype(str).str[:7]
+        unique_months = dataframe[date_field].unique().tolist()
         continues_values_for_inserted_month = [i+1 for i, _ in enumerate(unique_months)]
         continues_values_for_inserted_month.reverse()
-        self.input_data[date_field] = self.input_data[date_field].replace(unique_months, continues_values_for_inserted_month)
+        dataframe[date_field] = dataframe[date_field].replace(unique_months, continues_values_for_inserted_month)
         self.continious_features.append(date_field)
+        return {date: index for date, index in zip(unique_months, continues_values_for_inserted_month)}
 
     @staticmethod
-    def _convert_booleans(self, data: pd.DataFrame, boolean_features: list):
+    def _convert_booleans(data: pd.DataFrame, boolean_features: list):
         for col in boolean_features:
             data[col] = data[col].fillna(0)
             data[col] = data[col].astype(bool)
@@ -190,74 +205,92 @@ class MyRandomForestRegressor:
     
     def _encode_categorical_features(self, dataframe: pd.DataFrame):
         # encode categorical features
-        encoded_data = {}
         for column in self.all_columns:
             # scanning in categorical and continious features
             try:
                 # If the feature is categorical then encode the categories
-                categorical_convert = self.encoders[column]
-                encoded_data[column] = categorical_convert.transform(self.processed_data[column])
+                encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
+                categorical_convert = encoders[column]
+                dataframe[column] = categorical_convert.transform(dataframe[column])
             except:   
                 # If the feature is not categorical the add as it is
-                encoded_data[column] = self.input_data[column]
+                dataframe[column] = dataframe[column]
         
-        return encoded_data
+    
+    def _convert_datetime_to_continious_integer(self, dataframe: pd.DataFrame, date_field: str):
+        # Converts year-month format into a unique integer
+        converter = joblib.load(f"./{self.path_to_artifacts}/date_index_map_{self.suffix}.joblib")
+        dataframe[date_field] = dataframe[date_field].astype(str).str[:7]
+        dataframe[date_field] = dataframe[date_field].replace(converter.keys(), converter.values())
     
 
-    def predict(self, input_data):
-        path_to_artifacts = "bin/"
-        # self.values_fill_missing = joblib.load(path_to_artifacts + "most_frequent_values.joblib")
-        # self.encoders = joblib.load(path_to_artifacts + "encoders.joblib")
-        model = joblib.load(path_to_artifacts + f"random_forest_without_scaling_{self.suffix}.joblib")
-        input_df = pd.DataFrame.from_dict(input_data)
-        input_df = self._convert_booleans(input_df, self.boolean_features)
 
-        scale_continious_features(input_df, self.continious_features)
-        return model.predict(input_df)
+class MyRandomForestPredictor:
+    def __init__(self, input_data, suffix="satilik") -> None:
+        self.suffix = suffix
+        self.path_to_artifacts = "bin"
+        self.input_data = input_data
+        self.all_columns = input_data.columns.to_list()
+        self.continious_features = [col for col in ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm', 'deposit'] if col in self.all_columns]
+        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + ["price", "updated_at", "listing_category"])]
+        self.boolean_features = [col for col in input_data.columns if "_attributes" in col]
+        self.data = input_data[self.continious_features + self.categorical_features + self.boolean_features + ["updated_at"]]
 
-    def postprocessing(self, predictions):
-        result = []
-        for key, pred in enumerate(predictions):
-            label = "ucuz"
-            if pred < self.input_data[self.target_column][key]: label = "pahali"
-                
-            actual_price = self.input_data[self.target_column][key]
-            result.append({
-                "actual": actual_price,
-                "prediction": pred,
-                "diff_nominal": round(actual_price - pred),
-                "diff_percentage": round(100 * (actual_price - pred) / actual_price, 2),
-                "label": label,
-                "status": "OK"
-            })
-        
-        return result
+    @staticmethod
+    def _convert_booleans(data: pd.DataFrame, boolean_features: list):
+        for col in boolean_features:
+            data[col] = data[col].fillna(0)
+            data[col] = data[col].astype(bool)
 
-    def compute_prediction(self):
-        try:
-            encoded_data = self.preprocessing()
-            
-            prediction = self.predict(encoded_data)
-            
-            prediction = self.postprocessing(prediction)
+        return data
+    
+    def _encode_categorical_features(self, dataframe: pd.DataFrame):
+        # encode categorical features
+        for column in self.all_columns:
+            # scanning in categorical and continious features
+            try:
+                # If the feature is categorical then encode the categories
+                encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
+                categorical_convert = encoders[column]
+                dataframe[column] = categorical_convert.transform(dataframe[column])
+            except:   
+                # If the feature is not categorical the add as it is
+                dataframe[column] = dataframe[column]
 
-        except Exception as e:
-            return {"status": "Error", "message": str(e)}
+    def _convert_datetime_to_continious_integer(self, dataframe: pd.DataFrame, date_field: str):
+        # Converts year-month format into a unique integer
+        converter = joblib.load(f"./{self.path_to_artifacts}/date_index_map_{self.suffix}.joblib")
+        dataframe[date_field] = dataframe[date_field].astype(str).str[:7]
+        dataframe[date_field] = dataframe[date_field].replace(converter.keys(), converter.values())
 
-        return prediction
+    def predict(self):
+        self.values_fill_missing = joblib.load(f"./{self.path_to_artifacts}/most_frequent_values_{self.suffix}.joblib")
+        self.encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
+        model = joblib.load(f"./{self.path_to_artifacts}/random_forest_without_scaling_{self.suffix}.joblib")
+        self.data1 = self._convert_booleans(self.input_data, self.boolean_features)
+        self._encode_categorical_features(self.data1)
+        scale_continious_features(self.data1, self.continious_features)
+        self._convert_datetime_to_continious_integer(self.data1, "updated_at")
+        breakpoint()
+        return model.predict(self.data1)
+
 
 
 def get_non_common_features(set1, set2):
     return list(set1.symmetric_difference(set2))
 
 if __name__ == "__main__":
-    regressor_satilik = MyRandomForestRegressor("exports/sorted-result-satilik.csv", suffix="satilik")
-    regressor_kiralik = MyRandomForestRegressor("exports/sorted-result-kiralik.csv", suffix="kiralik")
+    satilik_csv_dataframe = pd.read_csv("exports/sorted-result-satilik.csv")
+    regressor_satilik = MyRandomForestRegressor(satilik_csv_dataframe, suffix="satilik")
+    kiralik_csv_dataframe = pd.read_csv("exports/sorted-result-kiralik.csv")
+    regressor_kiralik = MyRandomForestRegressor(kiralik_csv_dataframe, suffix="kiralik")
     common_features = [c for c in set(regressor_satilik.input_data.columns).intersection(set(regressor_kiralik.input_data.columns))]
     non_common_features = get_non_common_features(
         set(regressor_satilik.input_data.columns), 
         set(regressor_kiralik.input_data.columns)
     )
+
+    # Bu extend işlemi hiçbir boka yaramıyor. Regressor zaten init oldu
     regressor_satilik.unnecessary_columns.extend(non_common_features)
     regressor_kiralik.unnecessary_columns.extend(non_common_features)
     regressor_satilik.train()

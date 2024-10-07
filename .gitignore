@@ -4,3 +4,5 @@ exports/*
 .env
 __pycache__
 logs/*
+*.joblib
+*.pkl

@@ -7,13 +7,16 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, Iterator, Optional, Union
 
+import joblib
+import pandas as pd
+
 from database import session
 from models import Attribute, DataSource
 from models import House as HouseModel, HouseAttribute
 from models import ListingCategory, RealtyType
 from settings import config as settings
 from utils import get_traceback
-from ai_model import MyRandomForestRegressor
+from ai_model import MyRandomForestPredictor, MyRandomForestRegressor
 
 logger = logging.getLogger("django")
 
@@ -70,6 +73,7 @@ class House:
     is_last_version: bool = field(default=True)
 
     def __post_init__(self):
+        self.url = f"https://{DataSource.HEPSI.value}/{self.url}"
         self.district = self.district["name"].encode("utf-8").decode("utf-8").lower()
         self.county = self.county["name"].encode("utf-8").decode("utf-8").lower()
         self.city = self.city["name"].encode("utf-8").decode("utf-8").lower()
@@ -176,10 +180,24 @@ class House:
                 else:
                     result[key] = item
 
+        # self.predict_prices(result)
+
         return result
     
-    def predict_prices(self):
-        pass
+    def predict_prices(self, result):
+        attributes = joblib.load(f"./bin/attributes_{self.listing_category.value}.joblib")
+        _attributes = {attr: (True if attr in self._attributes else False) for attr in attributes}
+        # inserted_at yerine created_at'i al
+        data = {**result, **_attributes}
+        df = pd.DataFrame.from_dict({key: [value] for key, value in data.items()})
+        regressor_satilik = MyRandomForestPredictor(input_data=df, suffix="satilik")
+        regressor_kiralik = MyRandomForestPredictor(input_data=df, suffix="kiralik")
+        price_satilik = regressor_satilik.predict()
+        breakpoint()
+        regressor_kiralik.predict()
+        # result["predicted_price"] = regressor.predicted_price
+        # result["predicted_rental_price"] = regressor.predicted_rental_price
+        
 
     def save(self):
         house = HouseModel(**self.to_dict())
