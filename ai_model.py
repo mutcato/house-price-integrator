@@ -108,8 +108,8 @@ class MyRandomForestRegressor:
         # Only get the columns are in self.all_columns
         self.continious_features = [col for col in ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm', 'deposit'] if col in self.all_columns]
         
-        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + [self.target_column, "updated_at"] + self.unnecessary_columns)]
         self.boolean_features = [col for col in self.input_data.columns if "_attributes" in col]
+        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + self.boolean_features + [self.target_column, "updated_at"] + self.unnecessary_columns)]
 
     def train(self):
         self.input_data = self._convert_booleans(self.input_data, self.boolean_features)
@@ -126,7 +126,7 @@ class MyRandomForestRegressor:
 
         scale_continious_features(self.input_data, self.continious_features)
 
-        X = self.input_data[self.continious_features + self.categorical_features + self.boolean_features + ["updated_at"]]
+        X = self.input_data[self.continious_features + self.categorical_features + self.boolean_features]
         y = self.input_data[self.target_column]
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state=123)
         rf = RandomForestRegressor(n_estimators = 100, n_jobs=-1)
@@ -140,12 +140,20 @@ class MyRandomForestRegressor:
         print(mean_squared_error(y_test.values, y_predict_with_rf))
         most_frequent_values = dict(self.input_data.mode().iloc[0])
         # save preprocessing objects and RF algorithm
+        
         joblib.dump(most_frequent_values, f"./bin/most_frequent_values_{self.suffix}.joblib", compress=True)
         joblib.dump(self.encoders, f"./bin/encoders_{self.suffix}.joblib", compress=True)
         joblib.dump(rf, f"./bin/random_forest_without_scaling_{self.suffix}.joblib", compress=True)
         joblib.dump(date_index_map, f"./bin/date_index_map_{self.suffix}.joblib", compress=True)
         joblib.dump(self.boolean_features, f"./bin/attributes_{self.suffix}.joblib", compress=True)
+        joblib.dump(self.feature_importances(rf, X_train), f"./bin/feature_importances_{self.suffix}.joblib", compress=True)
         # joblib.dump(et, "./bin/extra_trees_without_scaling.joblib", compress=True)
+
+    def feature_importances(self, model: RandomForestRegressor, X_train: pd.DataFrame) -> dict:
+        importances = model.feature_importances_
+        features = X_train.columns
+        return {feature: importance for feature, importance in zip(features, importances)}
+        
 
     def _convert_date_to_integer(self, dataframe: pd.DataFrame, date_field: str):
         # Converts year-month format into a unique integer
@@ -231,8 +239,9 @@ class MyRandomForestPredictor:
         self.path_to_artifacts = "bin"
         self.input_data = input_data
         self.all_columns = input_data.columns.to_list()
+        self.unnecessary_columns = [col for col in ['id', 'internal_id', 'data_source', 'url', 'version', 'is_last_version', 'created_at' ,'inserted_at', 'predicted_price', 'predicted_rental_price', 'is_active', 'listing_category'] if col in self.all_columns]
         self.continious_features = [col for col in ['room', 'living_room', 'age', 'latitude', 'longitude', 'net_sqm', 'gross_sqm', 'deposit'] if col in self.all_columns]
-        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + ["price", "updated_at", "listing_category"])]
+        self.categorical_features = [col for col in self.all_columns if col not in (self.continious_features + self.unnecessary_columns + ["price", "updated_at", "listing_category"])]
         self.boolean_features = [col for col in input_data.columns if "_attributes" in col]
         self.data = input_data[self.continious_features + self.categorical_features + self.boolean_features + ["updated_at"]]
 
@@ -246,11 +255,11 @@ class MyRandomForestPredictor:
     
     def _encode_categorical_features(self, dataframe: pd.DataFrame):
         # encode categorical features
-        for column in self.all_columns:
+        encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
+        for column in self.data.columns.to_list():
             # scanning in categorical and continious features
             try:
                 # If the feature is categorical then encode the categories
-                encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
                 categorical_convert = encoders[column]
                 dataframe[column] = categorical_convert.transform(dataframe[column])
             except:   
@@ -267,22 +276,25 @@ class MyRandomForestPredictor:
         self.values_fill_missing = joblib.load(f"./{self.path_to_artifacts}/most_frequent_values_{self.suffix}.joblib")
         self.encoders = joblib.load(f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib")
         model = joblib.load(f"./{self.path_to_artifacts}/random_forest_without_scaling_{self.suffix}.joblib")
+        feature_importances = joblib.load(f"./{self.path_to_artifacts}/feature_importances_{self.suffix}.joblib")
+        features = feature_importances.keys()
         self.data1 = self._convert_booleans(self.input_data, self.boolean_features)
         self._encode_categorical_features(self.data1)
         scale_continious_features(self.data1, self.continious_features)
         self._convert_datetime_to_continious_integer(self.data1, "updated_at")
+        data = self.data1[features]
         breakpoint()
-        return model.predict(self.data1)
-
+        return model.predict(data)
 
 
 def get_non_common_features(set1, set2):
     return list(set1.symmetric_difference(set2))
 
 if __name__ == "__main__":
-    satilik_csv_dataframe = pd.read_csv("exports/sorted-result-satilik.csv")
+    pre_name_of_the_file = "2024-10-05-sanitized"
+    satilik_csv_dataframe = pd.read_csv(f"exports/{pre_name_of_the_file}-satilik.csv")
     regressor_satilik = MyRandomForestRegressor(satilik_csv_dataframe, suffix="satilik")
-    kiralik_csv_dataframe = pd.read_csv("exports/sorted-result-kiralik.csv")
+    kiralik_csv_dataframe = pd.read_csv(f"exports/{pre_name_of_the_file}-kiralik.csv")
     regressor_kiralik = MyRandomForestRegressor(kiralik_csv_dataframe, suffix="kiralik")
     common_features = [c for c in set(regressor_satilik.input_data.columns).intersection(set(regressor_kiralik.input_data.columns))]
     non_common_features = get_non_common_features(
@@ -297,3 +309,8 @@ if __name__ == "__main__":
     regressor_kiralik.train()
     # linear_regression("exports/sorted-result-satilik.csv", "bin/linear_regression_model_satilik.pkl")
     # linear_regression("exports/sorted-result-kiralik.csv", "bin/linear_regression_model_kiralik.pkl")
+
+
+## Playground
+# df = pd.read_csv("exports/2024-10-05-sanitized-satilik.csv")
+# predictor = MyRandomForestPredictor(input_data=pd.DataFrame(df.head().to_dict(orient="records")))
