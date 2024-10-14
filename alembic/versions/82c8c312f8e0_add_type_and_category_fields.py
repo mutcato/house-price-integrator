@@ -1,10 +1,11 @@
 """Add Type and Category fields
 
 Revision ID: 82c8c312f8e0
-Revises: 
+Revises:
 Create Date: 2023-04-03 23:48:27.489840
 
 """
+
 import sqlalchemy as sa
 
 from alembic import op

@@ -58,7 +58,9 @@ class House(Base):
     __tablename__ = "houses"
     __table_args__ = (
         # this can be db.PrimaryKeyConstraint if you want it to be a primary key
-        UniqueConstraint("internal_id", "data_source", "version", "is_active", name="unique_house"),
+        UniqueConstraint(
+            "internal_id", "data_source", "version", "is_active", name="unique_house"
+        ),
     )
 
     internal_id = Column(Integer, index=True)

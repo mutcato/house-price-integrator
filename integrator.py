@@ -183,10 +183,14 @@ class House:
         # self.predict_prices(result)
 
         return result
-    
+
     def predict_prices(self, result):
-        attributes = joblib.load(f"./bin/attributes_{self.listing_category.value}.joblib")
-        _attributes = {attr: (True if attr in self._attributes else False) for attr in attributes}
+        attributes = joblib.load(
+            f"./bin/attributes_{self.listing_category.value}.joblib"
+        )
+        _attributes = {
+            attr: (True if attr in self._attributes else False) for attr in attributes
+        }
         # inserted_at yerine created_at'i al
         data = {**result, **_attributes}
         df = pd.DataFrame.from_dict({key: [value] for key, value in data.items()})
@@ -197,7 +201,6 @@ class House:
         regressor_kiralik.predict()
         # result["predicted_price"] = regressor.predicted_price
         # result["predicted_rental_price"] = regressor.predicted_rental_price
-        
 
     def save(self):
         house = HouseModel(**self.to_dict())
@@ -232,28 +235,36 @@ class House:
         if existing_houses.count() == 0:
             self.save()
             logger.info(f"House {self.internal_id} saved")
-        elif existing_houses.count() == 1 and existing_houses.first().price == self.price:
+        elif (
+            existing_houses.count() == 1 and existing_houses.first().price == self.price
+        ):
             existing_houses.update(self.to_dict())
             session.commit()
             logger.info(f"House {self.internal_id} updated")
-        elif existing_houses.count() == 1 and existing_houses.first().price != self.price:
+        elif (
+            existing_houses.count() == 1 and existing_houses.first().price != self.price
+        ):
             existing_house = existing_houses.first()
             self.version = existing_house.version + 1
             self.save()
             existing_house.is_last_version = False
             existing_house.is_active = False
             session.commit()
-            
+
             logger.info(
                 f"House {self.internal_id} updated. Old price: {existing_house.price}, new price: {self.price}, version: {self.version}"
             )
         elif existing_houses.count() > 1:
             for existing_house in existing_houses:
-                session.query(HouseAttribute).filter_by(house_id=existing_house.id).delete()
+                session.query(HouseAttribute).filter_by(
+                    house_id=existing_house.id
+                ).delete()
             logger.warning(f"Duplicate houses deleted: {[h for h in existing_houses]}")
             existing_houses.delete()
         else:
-            logger.error(f"THERE IS AN UNEXPECTED ERROR: {[h for h in existing_houses]}")
+            logger.error(
+                f"THERE IS AN UNEXPECTED ERROR: {[h for h in existing_houses]}"
+            )
         return
 
 
