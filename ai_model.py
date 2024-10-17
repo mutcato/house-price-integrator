@@ -34,10 +34,14 @@ from abc import ABC, abstractmethod
 logger = logging.getLogger(__name__)
 
 
-def scale_continious_features(data: pd.DataFrame, continious_features: list):
-    scaler = StandardScaler()
+def scale_continious_features(
+    data: pd.DataFrame, continious_features: list, scaler=None
+):
+    if scaler is None:
+        scaler = StandardScaler()
+
     data.loc[:, continious_features] = scaler.fit_transform(data[continious_features])
-    return data
+    return scaler
 
 
 def linear_regression(file: str, model_name: str):
@@ -51,8 +55,6 @@ def linear_regression(file: str, model_name: str):
         "net_sqm",
         "gross_sqm",
         "age",
-        "latitude",
-        "longitude",
     ]
     categorical_features = [
         "floor",
@@ -162,7 +164,13 @@ class BaseRandomForestRegressor(ABC):
             "credit",
             "deposit",
             "price",
+            "latitude",
+            "longitude",
         ]
+
+        self.all_columns = []
+        self.continious_features = []
+        self.categorical_features = []
 
     @property
     def input_data(self):
@@ -193,6 +201,10 @@ class BaseRandomForestRegressor(ABC):
         ):
             self._target = self._input_data[self._target_column]
 
+    @property
+    def _clean_dataframe(self):
+        return self.input_data
+
     def remove_highly_constant_columns(self, dataframe, threshold=0.9):
         # Calculate the threshold for 90% of the rows
         row_count = len(dataframe)
@@ -215,7 +227,7 @@ class BaseRandomForestRegressor(ABC):
         dataframe = dataframe.drop(columns=columns_to_drop)
         return dataframe
 
-    def convert_date_to_integer(
+    def create_mapping_date_to_integer(
         self, dataframe: pd.DataFrame, date_field: str = "updated_at"
     ):
         # Converts year-month format into a unique integer
@@ -233,17 +245,93 @@ class BaseRandomForestRegressor(ABC):
             for date, index in zip(unique_months, continues_values_for_inserted_month)
         }
 
+        return date_to_int_map
+
+    def get_most_frequent_values(self):
+        most_frequent_values = dict(self.preprocessed_dataframe.mode().iloc[0])
+        # save preprocessing objects and RF algorithm
         joblib.dump(
-            date_to_int_map,
-            f"./{self.path_to_artifacts}/date_index_map_{self.suffix}.joblib",
+            most_frequent_values,
+            f"./bin/most_frequent_values_{self.suffix}.joblib",
             compress=True,
         )
 
-        return date_to_int_map
+    @staticmethod
+    def convert_date_to_integer(date_str, date_index_map):
+        year_month = date_str[:7]  # Extract year and month in 'YYYY-MM' format
+        return date_index_map.get(
+            year_month, None
+        )  # Return the corresponding integer value
 
-    @abstractmethod
+    def encode_categorical_features(self, dataframe: pd.DataFrame, encoders: dict):
+        # encode categorical features
+
+        if list(encoders.keys()) != self.categorical_features:
+            raise ValueError("Encoders and categorical features are not matching")
+
+        for column in dataframe.columns.to_list():
+            # scanning in categorical and continious features
+            try:
+                # If the feature is categorical then encode the categories
+                categorical_convert = encoders[column]
+                dataframe.loc[:, column] = categorical_convert.transform(
+                    dataframe[column]
+                )
+            except:
+                # If the feature is not categorical the add as it is
+                dataframe.loc[:, column] = dataframe[column]
+
     def preprocess(self):
         """Preprocess the input data"""
+        self.preprocessed_dataframe = self._clean_dataframe
+
+        self.get_most_frequent_values()
+        self.preprocessed_dataframe, self.reverse_input_data = (
+            self.filter_common_county_districts(
+                self.preprocessed_dataframe, self.reverse_input_data
+            )
+        )
+
+        try:
+            encoders = joblib.load(f"./{self.path_to_artifacts}/encoders.joblib")
+            self.encode_categorical_features(self.preprocessed_dataframe, encoders)
+        except FileNotFoundError as e:
+            encoders = self.convert_categoricals(self.preprocessed_dataframe)
+            joblib.dump(encoders, f"./bin/encoders.joblib", compress=True)
+
+        try:
+            date_index_map = joblib.load(
+                f"./{self.path_to_artifacts}/date_index_map.joblib"
+            )
+            self.preprocessed_dataframe.loc[:, "updated_at"] = (
+                self.preprocessed_dataframe[
+                    "updated_at"
+                ].apply(lambda x: self.convert_date_to_integer(x, date_index_map))
+            )
+        except FileNotFoundError:
+            date_index_map = self.create_mapping_date_to_integer(
+                self.preprocessed_dataframe
+            )
+            joblib.dump(date_index_map, f"./bin/date_index_map.joblib", compress=True)
+
+        self.fill_nones_with_zeros(
+            self.preprocessed_dataframe, self.continious_features
+        )
+
+        try:
+            scaler = joblib.load(f"./{self.path_to_artifacts}/scaler.joblib")
+            scale_continious_features(
+                self.preprocessed_dataframe, self.continious_features, scaler=scaler
+            )
+        except FileNotFoundError:
+            scaler = scale_continious_features(
+                self.preprocessed_dataframe, self.continious_features
+            )
+            joblib.dump(
+                scaler,
+                f"./bin/scaler.joblib",
+                compress=True,
+            )
 
     def fill_nones_with_zeros(self, dataframe: pd.DataFrame, continious_features: list):
         # Fill None values continious_features with 0.
@@ -274,6 +362,30 @@ class BaseRandomForestRegressor(ABC):
         return {
             feature: importance for feature, importance in zip(features, importances)
         }
+
+    @staticmethod
+    def filter_common_county_districts(df1: pd.DataFrame, df2: pd.DataFrame) -> tuple:
+        # Step 1: Find common county_district values
+        common_county_districts = set(df1["county_district"]).intersection(
+            set(df2["county_district"])
+        )
+
+        # Step 2: Filter DataFrames by common county_district values
+        df1_filtered = df1[df1["county_district"].isin(common_county_districts)]
+        df2_filtered = df2[df2["county_district"].isin(common_county_districts)]
+
+        # Step 3: Find common city values
+        common_cities = set(df1_filtered["city"]).intersection(
+            set(df2_filtered["city"])
+        )
+
+        # Step 4: Filter DataFrames by common city values
+        df1_filtered = df1_filtered[df1_filtered["city"].isin(common_cities)]
+        df2_filtered = df2_filtered[df2_filtered["city"].isin(common_cities)]
+
+        print(f"Removed {len(df1) - len(df1_filtered)} rows from df1")
+        print(f"Removed {len(df2) - len(df2_filtered)} rows from df2")
+        return df1_filtered, df2_filtered
 
 
 class MyRandomForestRegressorForSatilikHouses(BaseRandomForestRegressor):
@@ -324,8 +436,6 @@ class MyRandomForestRegressorForSatilikHouses(BaseRandomForestRegressor):
                 "living_room",
                 "bathroom",
                 "age",
-                "latitude",
-                "longitude",
                 "net_sqm",
                 "gross_sqm",
                 "deposit",
@@ -345,21 +455,6 @@ class MyRandomForestRegressorForSatilikHouses(BaseRandomForestRegressor):
         return self.input_data[
             self.continious_features + self.categorical_features + [self.target_column]
         ]
-
-    def preprocess(self):
-        # self._convert_booleans(self.clean_dataframe, self.boolean_features)
-        self.preprocessed_dataframe = self._clean_dataframe
-        encoders = self.convert_categoricals(self.preprocessed_dataframe)
-        date_index_map = self.convert_date_to_integer(self.preprocessed_dataframe)
-        self.fill_nones_with_zeros(
-            self.preprocessed_dataframe, self.continious_features
-        )
-        scale_continious_features(self.preprocessed_dataframe, self.continious_features)
-
-        joblib.dump(encoders, f"./bin/encoders_{self.suffix}.joblib", compress=True)
-        joblib.dump(
-            date_index_map, f"./bin/date_index_map_{self.suffix}.joblib", compress=True
-        )
 
     def postprocess(self, model: RandomForestRegressor, X_train: pd.DataFrame):
         # save preprocessing objects and RF algorithm
@@ -390,7 +485,6 @@ class MyRandomForestRegressorForSatilikHouses(BaseRandomForestRegressor):
         imputer = SimpleImputer(strategy="mean")
         pipeline = make_pipeline(imputer, rf)
         rf_result = pipeline.fit(X_train, y_train)
-
         self.postprocess(rf, X_train)
 
         # Predictions with test data
@@ -405,21 +499,6 @@ class MyRandomForestRegressorForSatilikHouses(BaseRandomForestRegressor):
             data[col] = data[col].astype(bool)
 
         return data
-
-    def _encode_categorical_features(self, dataframe: pd.DataFrame):
-        # encode categorical features
-        for column in self.all_columns:
-            # scanning in categorical and continious features
-            try:
-                # If the feature is categorical then encode the categories
-                encoders = joblib.load(
-                    f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib"
-                )
-                categorical_convert = encoders[column]
-                dataframe[column] = categorical_convert.transform(dataframe[column])
-            except:
-                # If the feature is not categorical the add as it is
-                logger.info(f"Column {column} is not categorical")
 
 
 class MyRandomForestRegressorForRentalHouses(BaseRandomForestRegressor):
@@ -470,8 +549,6 @@ class MyRandomForestRegressorForRentalHouses(BaseRandomForestRegressor):
                 "living_room",
                 "bathroom",
                 "age",
-                "latitude",
-                "longitude",
                 "net_sqm",
                 "gross_sqm",
                 "deposit",
@@ -491,21 +568,6 @@ class MyRandomForestRegressorForRentalHouses(BaseRandomForestRegressor):
         return self.input_data[
             self.continious_features + self.categorical_features + [self.target_column]
         ]
-
-    def preprocess(self):
-        # self._convert_booleans(self.clean_dataframe, self.boolean_features)
-        self.preprocessed_dataframe = self._clean_dataframe
-        encoders = self.convert_categoricals(self.preprocessed_dataframe)
-        date_index_map = self.convert_date_to_integer(self.preprocessed_dataframe)
-        self.fill_nones_with_zeros(
-            self.preprocessed_dataframe, self.continious_features
-        )
-        scale_continious_features(self.preprocessed_dataframe, self.continious_features)
-
-        joblib.dump(encoders, f"./bin/encoders_{self.suffix}.joblib", compress=True)
-        joblib.dump(
-            date_index_map, f"./bin/date_index_map_{self.suffix}.joblib", compress=True
-        )
 
     def postprocess(self, model: RandomForestRegressor, X_train: pd.DataFrame):
         # save preprocessing objects and RF algorithm
@@ -552,21 +614,6 @@ class MyRandomForestRegressorForRentalHouses(BaseRandomForestRegressor):
 
         return data
 
-    def _encode_categorical_features(self, dataframe: pd.DataFrame):
-        # encode categorical features
-        for column in self.all_columns:
-            # scanning in categorical and continious features
-            try:
-                # If the feature is categorical then encode the categories
-                encoders = joblib.load(
-                    f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib"
-                )
-                categorical_convert = encoders[column]
-                dataframe[column] = categorical_convert.transform(dataframe[column])
-            except:
-                # If the feature is not categorical the add as it is
-                logger.info(f"Column {column} is not categorical")
-
 
 class MyRandomForestPredictor:
     def __init__(self, input_data, suffix="satilik") -> None:
@@ -578,53 +625,31 @@ class MyRandomForestPredictor:
         )
         self.all_columns = input_data.columns.to_list()
         self.identifiers = self.input_data[["internal_id", "data_source", "price"]]
-        self.unnecessary_columns = [
-            col
-            for col in [
-                "id",
-                "internal_id",
-                "data_source",
-                "url",
-                "version",
-                "is_last_version",
-                "created_at",
-                "inserted_at",
-                "predicted_price",
-                "predicted_rental_price",
-                "is_active",
-                "listing_category",
-                "district",
-                "county",
-            ]
-            if col in self.all_columns
-        ]
-        self.continious_features = [
-            col
-            for col in [
-                "room",
-                "living_room",
-                "age",
-                "latitude",
-                "longitude",
-                "net_sqm",
-                "gross_sqm",
-                "deposit",
-            ]
-            if col in self.all_columns
-        ]
-        self.categorical_features = [
-            col
-            for col in self.all_columns
-            if col
-            not in (
-                self.continious_features
-                + self.unnecessary_columns
-                + ["price", "updated_at", "listing_category"]
-            )
-            and "_attributes" not in col
-        ]
+
+        self.all_columns = self.get_all_columns()
+        self.categorical_features = self.get_categorical_features()
+        self.continious_features = self.get_continious_features()
+
         self.data = self.input_data[
             self.continious_features + self.categorical_features + ["updated_at"]
+        ]
+
+    def get_categorical_features(self):
+        self.encoders = joblib.load(f"./{self.path_to_artifacts}/encoders.joblib")
+        return list(self.encoders.keys())
+
+    def get_all_columns(self):
+        return list(
+            joblib.load(
+                f"./{self.path_to_artifacts}/feature_importances_{self.suffix}.joblib"
+            ).keys()
+        )
+
+    def get_continious_features(self):
+        return [
+            column
+            for column in self.all_columns
+            if column not in self.categorical_features
         ]
 
     @staticmethod
@@ -635,12 +660,13 @@ class MyRandomForestPredictor:
 
         return data
 
-    def _encode_categorical_features(self, dataframe: pd.DataFrame):
+    def encode_categorical_features(self, dataframe: pd.DataFrame, encoders: dict):
         # encode categorical features
-        encoders = joblib.load(
-            f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib"
-        )
-        for column in self.data.columns.to_list():
+
+        if list(encoders.keys()) != self.categorical_features:
+            raise ValueError("Encoders and categorical features are not matching")
+
+        for column in dataframe.columns.to_list():
             # scanning in categorical and continious features
             try:
                 # If the feature is categorical then encode the categories
@@ -652,36 +678,36 @@ class MyRandomForestPredictor:
                 # If the feature is not categorical the add as it is
                 dataframe.loc[:, column] = dataframe[column]
 
-    def _convert_datetime_to_continious_integer(
-        self, dataframe: pd.DataFrame, date_field: str
-    ):
-        # Converts year-month format into a unique integer
-        converter = joblib.load(
-            f"./{self.path_to_artifacts}/date_index_map_{self.suffix}.joblib"
-        )
-        dataframe.loc[:, date_field] = dataframe[date_field].astype(str).str[:7]
-        dataframe.loc[:, date_field] = dataframe[date_field].replace(
-            converter.keys(), converter.values()
-        )
+    @staticmethod
+    def convert_date_to_integer(date_str, date_index_map):
+        year_month = date_str[:7]  # Extract year and month in 'YYYY-MM' format
+        return date_index_map.get(
+            year_month, None
+        )  # Return the corresponding integer value
 
     def predict(self):
         self.values_fill_missing = joblib.load(
             f"./{self.path_to_artifacts}/most_frequent_values_{self.suffix}.joblib"
         )
-        self.encoders = joblib.load(
-            f"./{self.path_to_artifacts}/encoders_{self.suffix}.joblib"
-        )
+        encoders = joblib.load(f"./{self.path_to_artifacts}/encoders.joblib")
         model = joblib.load(
             f"./{self.path_to_artifacts}/random_forest_without_scaling_{self.suffix}.joblib"
         )
         feature_importances = joblib.load(
             f"./{self.path_to_artifacts}/feature_importances_{self.suffix}.joblib"
         )
+        date_index_map = joblib.load(
+            f"./{self.path_to_artifacts}/date_index_map.joblib"
+        )
+        scaler = joblib.load(f"./{self.path_to_artifacts}/scaler.joblib")
+
         features = feature_importances.keys()
         data = self.input_data[features]
-        self._encode_categorical_features(data)
-        scale_continious_features(data, self.continious_features)
-        self._convert_datetime_to_continious_integer(data, "updated_at")
+        self.encode_categorical_features(data, encoders)
+        data.loc[:, "updated_at"] = data["updated_at"].apply(
+            lambda x: self.convert_date_to_integer(x, date_index_map)
+        )
+        scale_continious_features(data, self.continious_features, scaler)
         predictions = model.predict(data)
         print(predictions, self.identifiers)
         return predictions
